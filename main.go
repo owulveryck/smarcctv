@@ -117,7 +117,7 @@ func main() {
 	}
 	timeout := uint32(5) //5 seconds
 	hourly := time.Tick(1 * time.Hour)
-	tick := time.Tick(500 * time.Millisecond)
+	tick := time.Tick(1000 * time.Millisecond)
 
 	for {
 		err = cam.WaitForFrame(timeout)
@@ -187,9 +187,8 @@ func main() {
 				// labels for each image in the "batch". The batch size was 1.
 				// Find the most probably label index.
 				probabilities := output[0].Value().([][]float32)[0]
-				printBestLabel(probabilities, config.LabelsFile)
+				//printBestLabel(probabilities, config.LabelsFile)
 				if isPeople(probabilities, labels) > 80 {
-					log.Println("recording")
 					go func(frame []byte) {
 						name := config.KeyPrefix + "/alert/" + time.Now().Format("2006-01-02") + "/" + time.Now().Format("3:04PM") + ".jpg"
 						input := &s3.PutObjectInput{
