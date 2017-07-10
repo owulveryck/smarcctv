@@ -6,8 +6,13 @@ import (
 	"io/ioutil"
 	"log"
 	"os"
+	"strings"
 	"time"
 
+	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go/aws/awserr"
+	"github.com/aws/aws-sdk-go/aws/session"
+	"github.com/aws/aws-sdk-go/service/s3"
 	"github.com/blackjack/webcam"
 	"github.com/kelseyhightower/envconfig"
 	tf "github.com/tensorflow/tensorflow/tensorflow/go"
@@ -23,6 +28,11 @@ type Configuration struct {
 }
 
 func main() {
+	// Create a session to share configuration, and load external configuration.
+	sess := session.Must(session.NewSession())
+
+	// Create the service's client with the session.
+	svc := s3.New(sess)
 
 	var config Configuration
 	err := envconfig.Process("SMARCCTV", &config)
@@ -44,11 +54,11 @@ func main() {
 	}
 
 	// Create a session for inference over graph.
-	session, err := tf.NewSession(graph, nil)
+	sessionTF, err := tf.NewSession(graph, nil)
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer session.Close()
+	defer sessionTF.Close()
 
 	// Found the best match. Read the string from labelsFile, which
 	// contains one line per label.
@@ -137,7 +147,7 @@ func main() {
 				if err != nil {
 					log.Fatal(err)
 				}
-				output, err := session.Run(
+				output, err := sessionTF.Run(
 					map[tf.Output]*tf.Tensor{
 						graph.Operation("Mul").Output(0): tensor,
 					},
@@ -155,6 +165,29 @@ func main() {
 				printBestLabel(probabilities, config.LabelsFile)
 				if isPeople(probabilities, labels) > 80 {
 					log.Println("recording")
+					go func(frame []byte) {
+						name := config.KeyPrefix + "/" + time.Now().String() + ".jpg"
+						input := &s3.PutObjectInput{
+							Body:   aws.ReadSeekCloser(strings.NewReader(string(frame))),
+							Bucket: &config.Bucket,
+							Key:    aws.String(name),
+						}
+
+						_, err := svc.PutObject(input)
+						if err != nil {
+							if aerr, ok := err.(awserr.Error); ok {
+								switch aerr.Code() {
+								default:
+									fmt.Println(aerr.Error())
+								}
+							} else {
+								// Print the error, cast err to awserr.Error to get the Code and
+								// Message from an error.
+								fmt.Println(err.Error())
+							}
+							return
+						}
+					}(frame)
 				}
 			default:
 			}
@@ -223,12 +256,12 @@ func makeTensorFromImage(img []byte) (*tf.Tensor, error) {
 		return nil, err
 	}
 	// Execute that graph to normalize this one image
-	session, err := tf.NewSession(graph, nil)
+	sessionTF, err := tf.NewSession(graph, nil)
 	if err != nil {
 		return nil, err
 	}
-	defer session.Close()
-	normalized, err := session.Run(
+	defer sessionTF.Close()
+	normalized, err := sessionTF.Run(
 		map[tf.Output]*tf.Tensor{input: tensor},
 		[]tf.Output{output},
 		nil)
