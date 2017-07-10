@@ -1,3 +1,3 @@
 export SMARCCTV_BUCKET=smarcctv
-export SMARCCTV_MODELFILE=./models/output_graph.pb
-export SMARCCTV_LABELSFILE=./models/output_labels.txt 
+export SMARCCTV_MODELFILE=/tmp/output_graph.pb
+export SMARCCTV_LABELSFILE=/tmp/output_labels.txt 

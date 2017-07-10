@@ -2,14 +2,11 @@ package main
 
 import (
 	"bufio"
-	"bytes"
 	"fmt"
-	"image/jpeg"
 	"io/ioutil"
 	"log"
 	"os"
-
-	"github.com/nfnt/resize"
+	"time"
 
 	"github.com/blackjack/webcam"
 	"github.com/kelseyhightower/envconfig"
@@ -25,13 +22,8 @@ type Configuration struct {
 	LabelsFile string `required:"true"`
 }
 
-var (
-	config  Configuration
-	session tf.Session
-	graph   tf.Graph
-)
-
 func main() {
+	var config Configuration
 	err := envconfig.Process("SMARCCTV", &config)
 	if err != nil {
 		log.Fatal(err)
@@ -57,6 +49,7 @@ func main() {
 	}
 	defer session.Close()
 
+	// ****************************
 	// Init webcam
 	type frameSizes []webcam.FrameSize
 	//sess := session.Must(session.NewSession())
@@ -96,120 +89,59 @@ func main() {
 		panic(err.Error())
 	}
 	timeout := uint32(5) //5 seconds
-	//	for {
-	err = cam.WaitForFrame(timeout)
+	tick := time.Tick(1 * time.Second)
 
-	switch err.(type) {
-	case nil:
-	case *webcam.Timeout:
-		fmt.Fprint(os.Stderr, err.Error())
-		//continue
-	default:
-		panic(err.Error())
-	}
+	for {
+		err = cam.WaitForFrame(timeout)
 
-	frame, err := cam.ReadFrame()
-	if len(frame) != 0 {
-		// print(".")
-		log.Println("writing frame")
-		err = process(frame)
-		log.Println(err)
-	} else if err != nil {
-		panic(err.Error())
-	}
-	//	}
-	/*
-
-		s := New()
-		ctx := context.Background()
-		var cancelFn func()
-		timeout := 15 * time.Second
-		if timeout > 0 {
-			ctx, cancelFn = context.WithTimeout(ctx, timeout)
+		switch err.(type) {
+		case nil:
+		case *webcam.Timeout:
+			fmt.Fprint(os.Stderr, err.Error())
+			continue
+		default:
+			panic(err.Error())
 		}
-		// Ensure the context is canceled to prevent leaking.
-		// See context package for more information, https://golang.org/pkg/context/
-		defer cancelFn()
-		//key := config.KeyPrefix + time.Now().String()
-		var b bytes.Buffer
-		stream := MyStream{
-			b,
-			make(chan struct{}),
-		}
-		s.InStream = &stream
 
-		go stream.Record()
+		frame, err := cam.ReadFrame()
+		if len(frame) != 0 {
 
-		io.Copy(os.Stdout, bufio.NewReader(s.InStream))
-			upParams := &s3manager.UploadInput{
-				Bucket: &config.Bucket,
-				Key:    &key,
-				Body:   s.InStream,
-			}
+			select {
+			case <-tick:
 
-			// Perform an upload.
-			result, err := uploader.UploadWithContext(ctx, upParams)
+				// Run inference on *imageFile.
+				// For multiple images, session.Run() can be called in a loop (and
+				// concurrently). Alternatively, images can be batched since the model
+				// accepts batches of image data as input.
+				// decode jpeg into image.Image
 
-			if err != nil {
-				if aerr, ok := err.(awserr.Error); ok {
-					switch aerr.Code() {
-					default:
-						fmt.Println(aerr.Error())
-					}
-				} else {
-					// Print the error, cast err to awserr.Error to get the Code and
-					// Message from an error.
-					fmt.Println(err.Error())
+				tensor, err := makeTensorFromImage(frame)
+				//  tensor, err := makeTensorFromImage(*imagefile)
+				if err != nil {
+					log.Fatal(err)
 				}
-				return
+				output, err := session.Run(
+					map[tf.Output]*tf.Tensor{
+						graph.Operation("Mul").Output(0): tensor,
+					},
+					[]tf.Output{
+						graph.Operation("final_result").Output(0),
+					},
+					nil)
+				if err != nil {
+					log.Fatal("==> error ", err)
+				}
+				// output[0].Value() is a vector containing probabilities of
+				// labels for each image in the "batch". The batch size was 1.
+				// Find the most probably label index.
+				probabilities := output[0].Value().([][]float32)[0]
+				printBestLabel(probabilities, config.LabelsFile)
+			default:
 			}
-			log.Println(result)
-	*/
-}
-
-// process the frame
-func process(image []byte) error {
-
-	// Try to create a image.Image to see if the jpeg is valid
-
-	// decode jpeg into image.Image
-	img, err := jpeg.Decode(bytes.NewReader(image))
-	if err != nil {
-		log.Fatal(err)
+		} else if err != nil {
+			log.Println(err)
+		}
 	}
-	// resize to width 1000 using Lanczos resampling
-	// and preserve aspect ratio
-	m := resize.Resize(299, 0, img, resize.Lanczos3)
-	// write new image to file
-	var out bytes.Buffer
-	jpeg.Encode(&out, m, nil)
-
-	// Run inference on *imageFile.
-	// For multiple images, session.Run() can be called in a loop (and
-	// concurrently). Alternatively, images can be batched since the model
-	// accepts batches of image data as input.
-	tensor, err := makeTensorFromImage(out.Bytes())
-	if err != nil {
-		return err
-	}
-	log.Println(tensor)
-	output, err := session.Run(
-		map[tf.Output]*tf.Tensor{
-			graph.Operation("Mul").Output(0): tensor,
-		},
-		[]tf.Output{
-			graph.Operation("final_result").Output(0),
-		},
-		nil)
-	if err != nil {
-		return err
-	}
-	// output[0].Value() is a vector containing probabilities of
-	// labels for each image in the "batch". The batch size was 1.
-	// Find the most probably label index.
-	probabilities := output[0].Value().([][]float32)[0]
-	printBestLabel(probabilities, config.LabelsFile)
-	return nil
 }
 
 func printBestLabel(probabilities []float32, labelsFile string) {
@@ -238,17 +170,24 @@ func printBestLabel(probabilities []float32, labelsFile string) {
 }
 
 // Convert the image in filename to a Tensor suitable as input to the Inception model.
-func makeTensorFromImage(image []byte) (*tf.Tensor, error) {
-	// DecodeJpeg uses a scalar String-valued tensor as input.
-	tensor, err := tf.NewTensor(image)
+func makeTensorFromImage(img []byte) (*tf.Tensor, error) {
+
+	//func makeTensorFromImage(filename string) (*tf.Tensor, error) {
+	/*
+		//func makeTensorFromImage(img []byte) (*tf.Tensor, error) {
+		bytes, err := ioutil.ReadFile(filename)
+		if err != nil {
+			return nil, err
+		}
+	*/ // DecodeJpeg uses a scalar String-valued tensor as input.
+	tensor, err := tf.NewTensor(string(img))
+	//tensor, err := tf.NewTensor(img)
 	if err != nil {
-		log.Println("Cannot make tensor from image", err)
 		return nil, err
 	}
 	// Construct a graph to normalize the image
 	graph, input, output, err := constructGraphToNormalizeImage()
 	if err != nil {
-		log.Println("Cannot construct graph to normalize ", err)
 		return nil, err
 	}
 	// Execute that graph to normalize this one image
@@ -262,7 +201,6 @@ func makeTensorFromImage(image []byte) (*tf.Tensor, error) {
 		[]tf.Output{output},
 		nil)
 	if err != nil {
-		log.Println("Cannot run the normalization graph ", err)
 		return nil, err
 	}
 	return normalized[0], nil
