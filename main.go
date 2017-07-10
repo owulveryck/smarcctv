@@ -23,6 +23,7 @@ type Configuration struct {
 }
 
 func main() {
+
 	var config Configuration
 	err := envconfig.Process("SMARCCTV", &config)
 	if err != nil {
@@ -48,6 +49,22 @@ func main() {
 		log.Fatal(err)
 	}
 	defer session.Close()
+
+	// Found the best match. Read the string from labelsFile, which
+	// contains one line per label.
+	file, err := os.Open(config.LabelsFile)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer file.Close()
+	scanner := bufio.NewScanner(file)
+	var labels []string
+	for scanner.Scan() {
+		labels = append(labels, scanner.Text())
+	}
+	if err := scanner.Err(); err != nil {
+		log.Printf("ERROR: failed to read %s: %v", config.LabelsFile, err)
+	}
 
 	// ****************************
 	// Init webcam
@@ -89,7 +106,7 @@ func main() {
 		panic(err.Error())
 	}
 	timeout := uint32(5) //5 seconds
-	tick := time.Tick(1 * time.Second)
+	tick := time.Tick(500 * time.Millisecond)
 
 	for {
 		err = cam.WaitForFrame(timeout)
@@ -136,12 +153,27 @@ func main() {
 				// Find the most probably label index.
 				probabilities := output[0].Value().([][]float32)[0]
 				printBestLabel(probabilities, config.LabelsFile)
+				if isPeople(probabilities, labels) > 80 {
+					log.Println("recording")
+				}
 			default:
 			}
 		} else if err != nil {
 			log.Println(err)
 		}
 	}
+}
+func isPeople(probabilities []float32, labels []string) float32 {
+	bestIdx := 0
+	for i, p := range probabilities {
+		if p > probabilities[bestIdx] {
+			bestIdx = i
+		}
+	}
+	if labels[bestIdx] == "people" {
+		return probabilities[bestIdx] * 100.0
+	}
+	return 0
 }
 
 func printBestLabel(probabilities []float32, labelsFile string) {
