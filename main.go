@@ -116,6 +116,7 @@ func main() {
 		panic(err.Error())
 	}
 	timeout := uint32(5) //5 seconds
+	hourly := time.Tick(1 * time.Hour)
 	tick := time.Tick(500 * time.Millisecond)
 
 	for {
@@ -134,6 +135,30 @@ func main() {
 		if len(frame) != 0 {
 
 			select {
+			case <-hourly:
+				go func(frame []byte) {
+					name := config.KeyPrefix + "/check/" + time.Now().Format("2006-01-02") + "/" + time.Now().Format("3:04PM") + ".jpg"
+					input := &s3.PutObjectInput{
+						Body:   aws.ReadSeekCloser(strings.NewReader(string(frame))),
+						Bucket: &config.Bucket,
+						Key:    aws.String(name),
+					}
+
+					_, err := svc.PutObject(input)
+					if err != nil {
+						if aerr, ok := err.(awserr.Error); ok {
+							switch aerr.Code() {
+							default:
+								fmt.Println(aerr.Error())
+							}
+						} else {
+							// Print the error, cast err to awserr.Error to get the Code and
+							// Message from an error.
+							fmt.Println(err.Error())
+						}
+						return
+					}
+				}(frame)
 			case <-tick:
 
 				// Run inference on *imageFile.
@@ -166,7 +191,7 @@ func main() {
 				if isPeople(probabilities, labels) > 80 {
 					log.Println("recording")
 					go func(frame []byte) {
-						name := config.KeyPrefix + "/" + time.Now().String() + ".jpg"
+						name := config.KeyPrefix + "/alert/" + time.Now().Format("2006-01-02") + "/" + time.Now().Format("3:04PM") + ".jpg"
 						input := &s3.PutObjectInput{
 							Body:   aws.ReadSeekCloser(strings.NewReader(string(frame))),
 							Bucket: &config.Bucket,
