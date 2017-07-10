@@ -2,10 +2,14 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"fmt"
+	"image/jpeg"
 	"io/ioutil"
 	"log"
 	"os"
+
+	"github.com/nfnt/resize"
 
 	"github.com/blackjack/webcam"
 	"github.com/kelseyhightower/envconfig"
@@ -166,11 +170,25 @@ func main() {
 // process the frame
 func process(image []byte) error {
 
+	// Try to create a image.Image to see if the jpeg is valid
+
+	// decode jpeg into image.Image
+	img, err := jpeg.Decode(bytes.NewReader(image))
+	if err != nil {
+		log.Fatal(err)
+	}
+	// resize to width 1000 using Lanczos resampling
+	// and preserve aspect ratio
+	m := resize.Resize(299, 0, img, resize.Lanczos3)
+	// write new image to file
+	var out bytes.Buffer
+	jpeg.Encode(&out, m, nil)
+
 	// Run inference on *imageFile.
 	// For multiple images, session.Run() can be called in a loop (and
 	// concurrently). Alternatively, images can be batched since the model
 	// accepts batches of image data as input.
-	tensor, err := makeTensorFromImage(image)
+	tensor, err := makeTensorFromImage(out.Bytes())
 	if err != nil {
 		return err
 	}
