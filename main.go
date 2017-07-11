@@ -137,11 +137,12 @@ func main() {
 			select {
 			case <-hourly:
 				go func(frame []byte) {
-					name := config.KeyPrefix + "/check/" + time.Now().Format("2006-01-02") + "/" + time.Now().Format("3:04PM") + ".jpg"
+					name := config.KeyPrefix + "/check/index.html"
 					input := &s3.PutObjectInput{
-						Body:   aws.ReadSeekCloser(strings.NewReader(string(frame))),
-						Bucket: &config.Bucket,
-						Key:    aws.String(name),
+						Body:        aws.ReadSeekCloser(strings.NewReader(index)),
+						Bucket:      &config.Bucket,
+						Key:         aws.String(name),
+						ContentType: aws.String("text/html"),
 					}
 
 					_, err := svc.PutObject(input)
@@ -157,6 +158,31 @@ func main() {
 							fmt.Println(err.Error())
 						}
 						return
+					}
+					name = config.KeyPrefix + "/check/" + time.Now().Format("2006-01-02") + "/" + time.Now().Format("3:04PM") + ".jpg"
+					latest := config.KeyPrefix + "/check/latest.jpg"
+					for _, name := range []string{name, latest} {
+						input := &s3.PutObjectInput{
+							Body:        aws.ReadSeekCloser(strings.NewReader(string(frame))),
+							Bucket:      &config.Bucket,
+							Key:         aws.String(name),
+							ContentType: aws.String("image/jpeg"),
+						}
+
+						_, err := svc.PutObject(input)
+						if err != nil {
+							if aerr, ok := err.(awserr.Error); ok {
+								switch aerr.Code() {
+								default:
+									fmt.Println(aerr.Error())
+								}
+							} else {
+								// Print the error, cast err to awserr.Error to get the Code and
+								// Message from an error.
+								fmt.Println(err.Error())
+							}
+							return
+						}
 					}
 				}(frame)
 			case <-tick:
@@ -189,12 +215,15 @@ func main() {
 				probabilities := output[0].Value().([][]float32)[0]
 				//printBestLabel(probabilities, config.LabelsFile)
 				if isPeople(probabilities, labels) > 80 {
+					log.Println("recording")
 					go func(frame []byte) {
-						name := config.KeyPrefix + "/alert/" + time.Now().Format("2006-01-02") + "/" + time.Now().Format("3:04PM") + ".jpg"
+						name := config.KeyPrefix + "/alert/" + time.Now().Format("2006-01-02") + "/" + time.Now().String() + ".jpg"
 						input := &s3.PutObjectInput{
-							Body:   aws.ReadSeekCloser(strings.NewReader(string(frame))),
-							Bucket: &config.Bucket,
-							Key:    aws.String(name),
+							Body:                    aws.ReadSeekCloser(strings.NewReader(string(frame))),
+							Bucket:                  &config.Bucket,
+							Key:                     aws.String(name),
+							ContentType:             aws.String("image/jpeg"),
+							WebsiteRedirectLocation: aws.String(config.KeyPrefix + "/alert/latest.jpg"),
 						}
 
 						_, err := svc.PutObject(input)
@@ -334,3 +363,11 @@ func constructGraphToNormalizeImage() (graph *tf.Graph, input, output tf.Output,
 	graph, err = s.Finalize()
 	return graph, input, output, err
 }
+
+var index = `
+<html>
+<body>
+<img src="latest.jpg"></img>
+</body>
+</html>
+`
