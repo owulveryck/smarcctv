@@ -121,6 +121,7 @@ func main() {
 		if len(frame) != 0 {
 
 			select {
+
 			case <-tick:
 
 				// Run inference on *imageFile.
