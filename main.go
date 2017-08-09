@@ -6,13 +6,8 @@ import (
 	"io/ioutil"
 	"log"
 	"os"
-	"strings"
 	"time"
 
-	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/aws/awserr"
-	"github.com/aws/aws-sdk-go/aws/session"
-	"github.com/aws/aws-sdk-go/service/s3"
 	"github.com/blackjack/webcam"
 	"github.com/kelseyhightower/envconfig"
 	tf "github.com/tensorflow/tensorflow/tensorflow/go"
@@ -21,19 +16,11 @@ import (
 
 // Configuration holds the environment variables
 type Configuration struct {
-	Bucket     string `required:"true"`
-	KeyPrefix  string `default:"/smarcctv"`
 	ModelFile  string `required:"true"`
 	LabelsFile string `required:"true"`
 }
 
 func main() {
-	// Create a session to share configuration, and load external configuration.
-	sess := session.Must(session.NewSession())
-
-	// Create the service's client with the session.
-	svc := s3.New(sess)
-
 	var config Configuration
 	err := envconfig.Process("SMARCCTV", &config)
 	if err != nil {
@@ -116,7 +103,6 @@ func main() {
 		panic(err.Error())
 	}
 	timeout := uint32(5) //5 seconds
-	hourly := time.Tick(1 * time.Hour)
 	tick := time.Tick(1000 * time.Millisecond)
 
 	for {
@@ -135,30 +121,6 @@ func main() {
 		if len(frame) != 0 {
 
 			select {
-			case <-hourly:
-				go func(frame []byte) {
-					name := config.KeyPrefix + "/check/" + time.Now().Format("2006-01-02") + "/" + time.Now().Format("3:04PM") + ".jpg"
-					input := &s3.PutObjectInput{
-						Body:   aws.ReadSeekCloser(strings.NewReader(string(frame))),
-						Bucket: &config.Bucket,
-						Key:    aws.String(name),
-					}
-
-					_, err := svc.PutObject(input)
-					if err != nil {
-						if aerr, ok := err.(awserr.Error); ok {
-							switch aerr.Code() {
-							default:
-								fmt.Println(aerr.Error())
-							}
-						} else {
-							// Print the error, cast err to awserr.Error to get the Code and
-							// Message from an error.
-							fmt.Println(err.Error())
-						}
-						return
-					}
-				}(frame)
 			case <-tick:
 
 				// Run inference on *imageFile.
@@ -189,29 +151,7 @@ func main() {
 				probabilities := output[0].Value().([][]float32)[0]
 				//printBestLabel(probabilities, config.LabelsFile)
 				if isPeople(probabilities, labels) > 80 {
-					go func(frame []byte) {
-						name := config.KeyPrefix + "/alert/" + time.Now().Format("2006-01-02") + "/" + time.Now().Format("3:04PM") + ".jpg"
-						input := &s3.PutObjectInput{
-							Body:   aws.ReadSeekCloser(strings.NewReader(string(frame))),
-							Bucket: &config.Bucket,
-							Key:    aws.String(name),
-						}
-
-						_, err := svc.PutObject(input)
-						if err != nil {
-							if aerr, ok := err.(awserr.Error); ok {
-								switch aerr.Code() {
-								default:
-									fmt.Println(aerr.Error())
-								}
-							} else {
-								// Print the error, cast err to awserr.Error to get the Code and
-								// Message from an error.
-								fmt.Println(err.Error())
-							}
-							return
-						}
-					}(frame)
+					fmt.Println("I have seen someone")
 				}
 			default:
 			}
